@@ -36,25 +36,25 @@ typedef struct __attribute__((packed))
     uint8_t     data[];
 } HciEventHdr;
 
-const char *requestDirectionNames[] = {
+static const char * const requestDirectionNames[] = {
     "OUT",
     "IN"
 };
 
-const char *requestTypeNames[] = {
+static const char * const requestTypeNames[] = {
     "Standard",
     "Class",
     "Vendor"
 };
 
-const char *requestRecipientNames[] = {
+static const char * const requestRecipientNames[] = {
     "Device",
     "Interface",
     "Endpoint",
     "Other"
 };
 
-const char* _hexDumpHCIData(uint8_t *buf, size_t len)
+static inline const char* _hexDumpHCIData(uint8_t *buf, size_t len)
 {
     ssize_t str_len = len * 3 + 1;
     char *str = (char*)IOMalloc(str_len);
@@ -89,7 +89,7 @@ public:
 private:
     static void captureIntelInterruptPipe(void *that, StandardUSB::EndpointDescriptor const *descriptor, IOUSBHostDevice *device);
     static void *_hookPipeInstance;
-    static AsyncOwnerData *_interruptPipeAsyncOwner;
+    static IOUSBHostDevice *_hookDeviceInstance;
     static bool _randomAddressInit;
 };
 
