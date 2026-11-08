@@ -321,7 +321,7 @@ bulkWrite(const void *data, uint32_t length, uint32_t timeout)
     }
     if ((ret = m_pBulkWritePipe->io(buffer, (uint32_t)buffer->getLength(), actLen, timeout)) != kIOReturnSuccess) {
         XYLog("Failed to write to bulk pipe (error %d)\n", ret);
-        buffer->complete();
+        buffer->complete(kIODirectionOut);
         buffer->release();
         return ret;
     }
@@ -330,6 +330,7 @@ bulkWrite(const void *data, uint32_t length, uint32_t timeout)
         buffer->release();
         return ret;
     }
+    buffer->release();
     return ret;
 }
 

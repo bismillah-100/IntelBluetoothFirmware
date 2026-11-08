@@ -18,9 +18,9 @@ extern "C" {
     {
         void* result = NULL;
         z_mem* zmem = NULL;
-        UInt32 allocSize =  items * size + sizeof(zmem);
+        UInt32 allocSize =  items * size + sizeof(z_mem);
         
-        zmem = (z_mem*)IOMalloc(allocSize);
+        zmem = (z_mem*)IOMallocZero(allocSize);
         
         if (zmem)
         {
@@ -33,6 +33,9 @@ extern "C" {
     
     void zcfree(void *opaque, void *ptr)
     {
+        if (!ptr) {
+            return;
+        }
         UInt32* skipper = (UInt32 *)ptr - 1;
         z_mem* zmem = (z_mem*)skipper;
         IOFree((void*)zmem, zmem->alloc_size);

@@ -63,6 +63,7 @@ bool IntelBluetoothFirmware::start(IOService *provider)
     makeUsable();
     
     if (!super::start(provider)) {
+        PMstop();
         return false;
     }
     
@@ -98,8 +99,13 @@ bool IntelBluetoothFirmware::start(IOService *provider)
 void IntelBluetoothFirmware::publishReg(bool isSucceed, const char *fwName)
 {
     m_pDevice->setProperty("FirmwareLoaded", isSucceed);
-    if (isSucceed)
-        setProperty("fw_name", OSString::withCString(fwName));
+    if (isSucceed && fwName) {
+        OSString *fwNameStr = OSString::withCString(fwName);
+        if (fwNameStr) {
+            setProperty("fw_name", fwNameStr);
+            fwNameStr->release();
+        }
+    }
     // Monterey+
     if (version_major >= 21)
         m_pDevice->setName("Bluetooth USB Host Controller");

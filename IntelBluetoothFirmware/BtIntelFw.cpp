@@ -17,6 +17,9 @@ firmwareConvertion(OSData *originalFirmware)
     unsigned int actualBytes = numBytes;
     OSData *fwData = NULL;
     unsigned char* _fwBytes = (unsigned char *)IOMalloc(numBytes);
+    if (!_fwBytes) {
+        return NULL;
+    }
     if (!uncompressFirmware(_fwBytes, &actualBytes, (unsigned char *)originalFirmware->getBytesNoCopy(), originalFirmware->getLength())) {
         IOFree(_fwBytes, numBytes);
         return NULL;
