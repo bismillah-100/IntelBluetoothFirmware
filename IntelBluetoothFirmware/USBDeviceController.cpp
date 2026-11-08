@@ -224,10 +224,13 @@ interruptHandler(void *owner, void *parameter, IOReturn status, uint32_t bytesTr
             break;
     }
     
+    IOLockLock(controller->_hciLock);
     InterruptResp *resp = (InterruptResp *)parameter;
     resp->status = status;
     resp->dataLen = bytesTransferred;
+    resp->done = true;
     IOLockWakeup(controller->_hciLock, controller, true);
+    IOLockUnlock(controller->_hciLock);
 }
 
 IOReturn USBDeviceController::
@@ -239,6 +242,7 @@ interruptPipeRead(void *buf, uint32_t buf_size, uint32_t *size, uint32_t timeout
     
     clock_interval_to_deadline(timeout, kMillisecondScale, reinterpret_cast<uint64_t*> (&deadline));
     memset(&interrupResp, 0, sizeof(interrupResp));
+    interrupResp.done = false;
     comple.action = interruptHandler;
     comple.owner = this;
     comple.parameter = &interrupResp;
@@ -251,14 +255,21 @@ interruptPipeRead(void *buf, uint32_t buf_size, uint32_t *size, uint32_t timeout
     
     if (ret == kIOReturnSuccess) {
         IOLockLock(_hciLock);
-        if (IOLockSleepDeadline(_hciLock, this, deadline, THREAD_INTERRUPTIBLE) != THREAD_AWAKENED) {
-            IOLockUnlock(_hciLock);
-            m_pInterruptReadPipe->abort();
+        while (!interrupResp.done) {
+            if (IOLockSleepDeadline(_hciLock, this, deadline, THREAD_UNINT) != THREAD_AWAKENED) {
+                break;
+            }
+        }
+        bool completed = interrupResp.done;
+        IOLockUnlock(_hciLock);
+
+        if (!completed) {
+            m_pInterruptReadPipe->abort(IOUSBHostIOSource::kAbortSynchronous, kIOReturnAborted);
             XYLog("%s Timeout\n", __FUNCTION__);
             return kIOReturnTimeout;
         }
+
         if (interrupResp.dataLen <= 0) {
-            IOLockUnlock(_hciLock);
             XYLog("%s invalid response size: %d\n", __FUNCTION__, interrupResp.dataLen);
             return kIOReturnError;
         }
@@ -271,7 +282,6 @@ interruptPipeRead(void *buf, uint32_t buf_size, uint32_t *size, uint32_t timeout
         if (size) {
             *size = min(interrupResp.dataLen, buf_size);
         }
-        IOLockUnlock(_hciLock);
     } else {
         XYLog("%s failed: %s %d\n", __FUNCTION__, stringFromReturn(ret), ret);
     }

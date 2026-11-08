@@ -22,6 +22,7 @@
 typedef struct {
     int status;
     uint32_t dataLen;
+    bool done;
 } InterruptResp;
 
 class USBDeviceController : public OSObject {
