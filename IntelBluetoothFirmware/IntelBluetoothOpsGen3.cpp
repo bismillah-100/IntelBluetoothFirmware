@@ -303,6 +303,7 @@ downloadFirmware(IntelVersionTLV *ver, uint32_t *bootParams)
          * FW download.
          */
         resetToBootloader();
+        ret = false;
         goto done;
     }
     
@@ -405,7 +406,8 @@ downloadFirmwareData(IntelVersionTLV *ver, OSData *fwData, uint32_t *bootParams,
         
     } else if (hwVariant >= 0x17) {
         /* Check if CSS header for ECDSA follows the RSA header */
-        if (((uint8_t *)fwData->getBytesNoCopy())[ECDSA_OFFSET] != 0x06)
+        if (fwData->getLength() < (RSA_HEADER_LEN + ECDSA_HEADER_LEN) ||
+            ((uint8_t *)fwData->getBytesNoCopy())[ECDSA_OFFSET] != 0x06)
             return -EINVAL;
         
         /* Check if the CSS Header version is ECDSA(0x00020000) */
@@ -480,6 +482,10 @@ parseVersionTLV(IntelVersionTLV *version, const uint8_t *versionDataPtr, int len
 {
     IntelTLV *tlv;
 
+    if (!version || !versionDataPtr || len < 1) {
+        return false;
+    }
+
     /* Consume Command Complete Status field */
     versionDataPtr++;
     len--;
@@ -489,75 +495,100 @@ parseVersionTLV(IntelVersionTLV *version, const uint8_t *versionDataPtr, int len
      * version field like hw_platform, hw_variant, and fw_variant
      * to keep the existing setup flow
      */
-    while (len > 0) {
+    while (len >= (int)sizeof(IntelTLV)) {
         tlv = (IntelTLV *)versionDataPtr;
+        if (tlv->len > len - sizeof(IntelTLV)) {
+            XYLog("Malformed TLV: tlv->len (%u) > remaining (%d)\n", tlv->len, (int)(len - sizeof(IntelTLV)));
+            return false;
+        }
+
         switch (tlv->type) {
             case INTEL_TLV_CNVI_TOP:
-                version->cnvi_top = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t))
+                    version->cnvi_top = get_unaligned_le32(tlv->val);
                 break;
             case INTEL_TLV_CNVR_TOP:
-                version->cnvr_top = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t))
+                    version->cnvr_top = get_unaligned_le32(tlv->val);
                 break;
             case INTEL_TLV_CNVI_BT:
-                version->cnvi_bt = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t))
+                    version->cnvi_bt = get_unaligned_le32(tlv->val);
                 break;
             case INTEL_TLV_CNVR_BT:
-                version->cnvr_bt = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t))
+                    version->cnvr_bt = get_unaligned_le32(tlv->val);
                 break;
             case INTEL_TLV_DEV_REV_ID:
-                version->dev_rev_id = get_unaligned_le16(tlv->val);
+                if (tlv->len >= sizeof(uint16_t))
+                    version->dev_rev_id = get_unaligned_le16(tlv->val);
                 break;
             case INTEL_TLV_IMAGE_TYPE:
-                version->img_type = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->img_type = tlv->val[0];
                 break;
             case INTEL_TLV_TIME_STAMP:
                 /* If image type is Operational firmware (0x03), then
                  * running FW Calendar Week and Year information can
                  * be extracted from Timestamp information
                  */
-                version->min_fw_build_cw = tlv->val[0];
-                version->min_fw_build_yy = tlv->val[1];
-                version->timestamp = get_unaligned_le16(tlv->val);
+                if (tlv->len >= 2) {
+                    version->min_fw_build_cw = tlv->val[0];
+                    version->min_fw_build_yy = tlv->val[1];
+                    version->timestamp = get_unaligned_le16(tlv->val);
+                }
                 break;
             case INTEL_TLV_BUILD_TYPE:
-                version->build_type = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->build_type = tlv->val[0];
                 break;
             case INTEL_TLV_BUILD_NUM:
                 /* If image type is Operational firmware (0x03), then
                  * running FW build number can be extracted from the
                  * Build information
                  */
-                version->min_fw_build_nn = tlv->val[0];
-                version->build_num = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t)) {
+                    version->min_fw_build_nn = tlv->val[0];
+                    version->build_num = get_unaligned_le32(tlv->val);
+                }
                 break;
             case INTEL_TLV_SECURE_BOOT:
-                version->secure_boot = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->secure_boot = tlv->val[0];
                 break;
             case INTEL_TLV_OTP_LOCK:
-                version->otp_lock = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->otp_lock = tlv->val[0];
                 break;
             case INTEL_TLV_API_LOCK:
-                version->api_lock = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->api_lock = tlv->val[0];
                 break;
             case INTEL_TLV_DEBUG_LOCK:
-                version->debug_lock = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->debug_lock = tlv->val[0];
                 break;
             case INTEL_TLV_MIN_FW:
-                version->min_fw_build_nn = tlv->val[0];
-                version->min_fw_build_cw = tlv->val[1];
-                version->min_fw_build_yy = tlv->val[2];
+                if (tlv->len >= 3) {
+                    version->min_fw_build_nn = tlv->val[0];
+                    version->min_fw_build_cw = tlv->val[1];
+                    version->min_fw_build_yy = tlv->val[2];
+                }
                 break;
             case INTEL_TLV_LIMITED_CCE:
-                version->limited_cce = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->limited_cce = tlv->val[0];
                 break;
             case INTEL_TLV_SBE_TYPE:
-                version->sbe_type = tlv->val[0];
+                if (tlv->len >= 1)
+                    version->sbe_type = tlv->val[0];
                 break;
             case INTEL_TLV_OTP_BDADDR:
-                memcpy(&version->otp_bd_addr, tlv->val, tlv->len);
+                memcpy(&version->otp_bd_addr, tlv->val, min((size_t)tlv->len, sizeof(version->otp_bd_addr)));
                 break;
             case INTEL_TLV_GIT_SHA1:
-                version->git_sha1 = get_unaligned_le32(tlv->val);
+                if (tlv->len >= sizeof(uint32_t))
+                    version->git_sha1 = get_unaligned_le32(tlv->val);
                 break;
             default:
                 /* Ignore rest of information */
@@ -601,9 +632,7 @@ readVersionTLV(IntelVersionTLV *version)
     versionDataPtr = resp->data;
     len = actLen - 5;
     
-    parseVersionTLV(version, versionDataPtr, len);
-    
-    return true;
+    return parseVersionTLV(version, versionDataPtr, len);
 }
 
 bool IntelBluetoothOpsGen3::

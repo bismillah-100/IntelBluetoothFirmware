@@ -180,7 +180,6 @@ bool BtIntel::
 resetToBootloader()
 {
     XYLog("%s\n", __FUNCTION__);
-    bool ret;
     uint8_t buf[CMD_BUF_MAX_SIZE];
     HciCommandHdr *cmd = (HciCommandHdr *)buf;
     IntelReset params;
@@ -210,7 +209,7 @@ resetToBootloader()
     cmd->len = sizeof(params);
     memcpy(cmd->data, &params, sizeof(params));
     
-    ret = m_pUSBDeviceController->sendHCIRequest(cmd, HCI_INIT_TIMEOUT);
+    IOReturn ret = m_pUSBDeviceController->sendHCIRequest(cmd, HCI_INIT_TIMEOUT);
     
     /* Current Intel BT controllers(ThP/JfP) hold the USB reset
      * lines for 2ms when it receives Intel Reset in bootloader mode.
@@ -219,7 +218,7 @@ resetToBootloader()
      */
     IOSleep(150);
     
-    return ret;
+    return ret == kIOReturnSuccess;
 }
 
 bool BtIntel::

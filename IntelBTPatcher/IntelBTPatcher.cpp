@@ -184,12 +184,14 @@ IOReturn CIntelBTPatcher::newFindQueueRequest(void *that, unsigned short arg1, v
     IOReturn ret = FunctionCast(newFindQueueRequest, callbackIBTPatcher->oldFindQueueRequest)(that, arg1, addr, arg2, arg3, hciRequestPtr);
     if (ret != 0 && arg1 == HCI_OP_LE_START_ENCRYPTION) {
         ret = FunctionCast(newFindQueueRequest, callbackIBTPatcher->oldFindQueueRequest)(that, arg1, addr, 0xffff, arg3, hciRequestPtr);
-        DBGLOG(DRV_NAME, "%s ret: %d arg1: 0x%04x arg2: 0x%04x arg3: %d ptr: %p", __FUNCTION__, ret, arg1, arg2, arg3, *hciRequestPtr);
+        DBGLOG(DRV_NAME, "%s ret: %d arg1: 0x%04x arg2: 0x%04x arg3: %d ptr: %p", __FUNCTION__, ret, arg1, arg2, arg3, hciRequestPtr ? *hciRequestPtr : nullptr);
     }
     return ret;
 }
 
 #pragma mark - For Monterey+ patch for intercept HCI REQ and RESP
+
+#define VENDOR_USB_INTEL 0x8087
 
 // Hardcoded Random Address HCI Command
 static const uint8_t randomAddressHci[9] = {0x05, 0x20, 0x06, 0x94, 0x50, 0x64, 0xD0, 0x78, 0x6B}; 
@@ -333,14 +335,18 @@ static void asyncIOCompletion(void* owner, void* parameter, IOReturn status, uin
                     leMetaStage = 1;            // real features complete -> pass through
                 } else if (currentStage == 1) {  // 1st duplicate -> fake PHY Update Complete
                     uint8_t localPhyEvent[8] = {0x3E, 0x06, 0x0C, 0x00, hdr->data[2], hdr->data[3], 0x02, 0x02};
-                    dataBuffer->writeBytes(0, localPhyEvent, sizeof(localPhyEvent));
-                    bytesTransferred = sizeof(localPhyEvent);
+                    if (dataBuffer->getLength() >= sizeof(localPhyEvent)) {
+                        dataBuffer->writeBytes(0, localPhyEvent, sizeof(localPhyEvent));
+                        bytesTransferred = sizeof(localPhyEvent);
+                    }
                     leMetaStage = 2;
                     decrementRemoteReadCount();
                 } else {                        // 2nd duplicate -> fake LE Data Length Change
                     uint8_t localDLCEvent[13] = {0x3E, 0x0B, 0x07, hdr->data[2], hdr->data[3], 0x1B, 0x00, 0x48, 0x01, 0x1B, 0x00, 0x48, 0x01};
-                    dataBuffer->writeBytes(0, localDLCEvent, sizeof(localDLCEvent));
-                    bytesTransferred = sizeof(localDLCEvent);
+                    if (dataBuffer->getLength() >= sizeof(localDLCEvent)) {
+                        dataBuffer->writeBytes(0, localDLCEvent, sizeof(localDLCEvent));
+                        bytesTransferred = sizeof(localDLCEvent);
+                    }
                     leMetaStage = 0;
                     decrementRemoteReadCount();
                 }
@@ -378,8 +384,6 @@ newAsyncIO(void *that, IOMemoryDescriptor* dataBuffer, uint32_t bytesTransferred
     }
     return ret;
 }
-
-#define VENDOR_USB_INTEL 0x8087
 
 void CIntelBTPatcher::captureIntelInterruptPipe(void *that, StandardUSB::EndpointDescriptor const *descriptor, IOUSBHostDevice *device)
 {

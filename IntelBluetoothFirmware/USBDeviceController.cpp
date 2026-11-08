@@ -109,7 +109,7 @@ initConfiguration()
     XYLog("%s\n", __PRETTY_FUNCTION__);
     uint8_t configIndex = 0;
     uint8_t configNum = m_pDevice->getDeviceDescriptor()->bNumConfigurations;
-    if (configNum < configIndex + configNum) {
+    if (configNum == 0 || configIndex >= configNum) {
         XYLog("config num error (num: %d)\n", configNum);
         return false;
     }

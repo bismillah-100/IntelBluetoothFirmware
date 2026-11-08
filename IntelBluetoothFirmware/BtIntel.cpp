@@ -236,26 +236,37 @@ loadDDCConfig(const char *ddcFileName)
     
     XYLog("Load DDC config: %s %d\n", ddcFileName, fwData->getLength());
     
-    fw_ptr = (uint8_t *)fwData->getBytesNoCopy();
+    const uint8_t *base = (const uint8_t *)fwData->getBytesNoCopy();
+    size_t totalLen = fwData->getLength();
+    bool ret = true;
+    fw_ptr = base;
     
     /* DDC file contains one or more DDC structure which has
      * Length (1 byte), DDC ID (2 bytes), and DDC value (Length - 2).
      */
-    while (fwData->getLength() > fw_ptr - (uint8_t *)fwData->getBytesNoCopy()) {
-        uint8_t cmd_plen = fw_ptr[0] + sizeof(uint8_t);
+    while ((size_t)(fw_ptr - base) < totalLen) {
+        size_t remain = totalLen - (size_t)(fw_ptr - base);
+        size_t cmd_plen = (size_t)fw_ptr[0] + sizeof(uint8_t);
+        if (cmd_plen > remain || cmd_plen > (CMD_BUF_MAX_SIZE - HCI_COMMAND_HDR_SIZE)) {
+            XYLog("DDC config record length error (%zu, remain: %zu)\n", cmd_plen, remain);
+            ret = false;
+            break;
+        }
 
         cmd->opcode = OSSwapHostToLittleInt16(0xfc8b);
-        cmd->len = cmd_plen;
+        cmd->len = (uint8_t)cmd_plen;
         memcpy(cmd->data, fw_ptr, cmd->len);
         if (!intelSendHCISync(cmd, NULL, 0, NULL, HCI_INIT_TIMEOUT)) {
             XYLog("Failed to send Intel_Write_DDC\n");
-            return false;
+            ret = false;
+            break;
         }
 
         fw_ptr += cmd_plen;
     }
     OSSafeReleaseNULL(fwData);
     
-    XYLog("Load DDC config done\n");
-    return true;
+    if (ret)
+        XYLog("Load DDC config done\n");
+    return ret;
 }

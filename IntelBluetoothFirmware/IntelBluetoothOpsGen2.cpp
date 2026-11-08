@@ -220,6 +220,7 @@ download:
          * FW download.
          */
         resetToBootloader();
+        ret = false;
         goto done;
     }
     
@@ -372,11 +373,27 @@ downloadFirmwarePayload(OSData *fwData, size_t offset)
     XYLog("send firmware payload\n");
     uint32_t frag_len;
     bool ret = true;
-    const uint8_t *fw_ptr = (uint8_t *)fwData->getBytesNoCopy() + offset;
+    const uint8_t *base = (const uint8_t *)fwData->getBytesNoCopy();
+    size_t totalLen = fwData->getLength();
+    if (offset > totalLen) {
+        return false;
+    }
+    const uint8_t *fw_ptr = base + offset;
     frag_len = 0;
     
-    while (fw_ptr - (uint8_t *)fwData->getBytesNoCopy() < fwData->getLength()) {
+    while ((size_t)(fw_ptr - base) < totalLen) {
+        size_t remain = totalLen - (size_t)(fw_ptr - base);
+        if (frag_len + sizeof(HciCommandHdr) > remain) {
+            XYLog("Malformed firmware payload\n");
+            ret = false;
+            goto done;
+        }
         HciCommandHdr *cmd = (HciCommandHdr *)(fw_ptr + frag_len);
+        if (frag_len + sizeof(*cmd) + cmd->len > remain) {
+            XYLog("Malformed firmware command length\n");
+            ret = false;
+            goto done;
+        }
         
         frag_len += sizeof(*cmd) + cmd->len;
         
@@ -399,6 +416,11 @@ downloadFirmwarePayload(OSData *fwData, size_t offset)
             frag_len = 0;
         }
     }
+
+    if (frag_len != 0) {
+        XYLog("Incomplete or unaligned payload tail: %u\n", frag_len);
+        ret = false;
+    }
     
 done:
     XYLog("send firmware payload done\n");
@@ -408,10 +430,19 @@ done:
 bool IntelBluetoothOpsGen2::
 firmwareVersion(uint8_t num, uint8_t ww, uint8_t yy, OSData *fwData, uint32_t *bootAddr)
 {
-    const uint8_t *fw_ptr = (const uint8_t *)fwData->getBytesNoCopy();
+    const uint8_t *base = (const uint8_t *)fwData->getBytesNoCopy();
+    size_t totalLen = fwData->getLength();
+    const uint8_t *fw_ptr = base;
     
-    while (fw_ptr - (uint8_t *)fwData->getBytesNoCopy() < fwData->getLength()) {
+    while ((size_t)(fw_ptr - base) < totalLen) {
+        size_t remain = totalLen - (size_t)(fw_ptr - base);
+        if (remain < sizeof(FWCommandHdr)) {
+            break;
+        }
         FWCommandHdr *cmd = (FWCommandHdr *)(fw_ptr);
+        if (remain < sizeof(*cmd) + cmd->len) {
+            break;
+        }
 
         /* Each SKU has a different reset parameter to use in the
          * HCI_Intel_Reset command and it is embedded in the firmware
@@ -420,6 +451,10 @@ firmwareVersion(uint8_t num, uint8_t ww, uint8_t yy, OSData *fwData, uint32_t *b
          */
         if (OSSwapLittleToHostConstInt16(cmd->opcode) == CMD_WRITE_BOOT_PARAMS) {
             struct cmd_write_boot_params *params;
+
+            if (cmd->len < sizeof(struct cmd_write_boot_params)) {
+                break;
+            }
 
             params = (struct cmd_write_boot_params *)(fw_ptr + sizeof(*cmd));
             

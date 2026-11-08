@@ -305,6 +305,11 @@ patching(OSData *fwData, const uint8_t **fw_ptr, bool *disablePatch)
         return false;
     }
     
+    if (cmd->len > sizeof(sendBuf) - sizeof(HciCommandHdr)) {
+        XYLog("Intel fw corrupted: cmd len exceeds buffer (%u)\n", cmd->len);
+        return false;
+    }
+
     memset(sendBuf, 0, sizeof(sendBuf));
     memset(respBuf, 0, sizeof(respBuf));
     hciCmd->opcode = OSSwapLittleToHostInt16(cmd->opcode);
