@@ -54,6 +54,7 @@ findInterface()
         if(interfaceCandidate != NULL) {
             XYLog("Found interface!!!\n");
             m_pInterface = interfaceCandidate;
+            m_pInterface->retain();
             break;
         }
     }
@@ -97,7 +98,7 @@ free()
             m_pInterface->close(m_pClient);
             m_pClient = NULL;
         }
-        m_pInterface = NULL;
+        OSSafeReleaseNULL(m_pInterface);
     }
     m_pDevice = NULL;
     super::free();
@@ -153,8 +154,6 @@ findPipes()
                 XYLog("Copy InterruptReadPipe pipe fail\n");
                 return false;
             }
-            m_pInterruptReadPipe->retain();
-            m_pInterruptReadPipe->release();
         } else {
             if (epDirection == kUSBOut && epType == kUSBBulk) {
                 XYLog("Found Bulk out endpoint!\n");
@@ -163,8 +162,6 @@ findPipes()
                     XYLog("Copy Bulk pipe fail\n");
                     return false;
                 }
-                m_pBulkWritePipe->retain();
-                m_pBulkWritePipe->release();
             } else {
                 if (epDirection == kUSBIn && epType == kUSBBulk) {
                     XYLog("Found Bulk in endpoint!\n");
@@ -173,8 +170,6 @@ findPipes()
                         XYLog("Copy Bulk pipe fail\n");
                         return false;
                     }
-                    m_pBulkReadPipe->retain();
-                    m_pBulkReadPipe->release();
                 }
             }
         }
@@ -217,8 +212,6 @@ interruptHandler(void *owner, void *parameter, IOReturn status, uint32_t bytesTr
     switch (status) {
         case kIOReturnSuccess:
             break;
-        case kIOReturnNotResponding:
-            controller->m_pInterruptReadPipe->clearStall(false);
         default:
             XYLog("%s status: %s (%d) len: %d\n", __FUNCTION__, controller->stringFromReturn(status), status, bytesTransferred);
             break;
@@ -267,6 +260,14 @@ interruptPipeRead(void *buf, uint32_t buf_size, uint32_t *size, uint32_t timeout
             m_pInterruptReadPipe->abort(IOUSBHostIOSource::kAbortSynchronous, kIOReturnAborted);
             XYLog("%s Timeout\n", __FUNCTION__);
             return kIOReturnTimeout;
+        }
+
+        if (interrupResp.status != kIOReturnSuccess) {
+            if (interrupResp.status == kIOUSBPipeStalled) {
+                m_pInterruptReadPipe->clearStall(true);
+            }
+            XYLog("%s completion failed: %s (%d)\n", __FUNCTION__, stringFromReturn(interrupResp.status), interrupResp.status);
+            return interrupResp.status;
         }
 
         if (interrupResp.dataLen <= 0) {
