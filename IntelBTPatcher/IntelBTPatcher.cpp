@@ -8,6 +8,7 @@
 #include <Headers/kern_api.hpp>
 #include <Headers/kern_util.hpp>
 #include <Headers/plugin_start.hpp>
+#include <IOKit/IOLocks.h>
 #include <libkern/OSAtomic.h>
 
 #include "IntelBTPatcher.hpp"
@@ -70,11 +71,14 @@ static KernelPatcher::KextInfo IntelBTPatcher_IOUsbHostInfo {
 void *CIntelBTPatcher::_hookPipeInstance = nullptr;
 IOUSBHostDevice *CIntelBTPatcher::_hookDeviceInstance = nullptr;
 bool CIntelBTPatcher::_randomAddressInit = false;
+bool CIntelBTPatcher::_supportsLe2MPhy = false;
+static IOSimpleLock *leMetaLock = nullptr;
 
 bool CIntelBTPatcher::init()
 {
     DBGLOG(DRV_NAME, "%s", __PRETTY_FUNCTION__);
     callbackIBTPatcher = this;
+    leMetaLock = IOSimpleLockAlloc();
     if (getKernelVersion() < KernelVersion::Monterey) {
         lilu.onKextLoadForce(&IntelBTPatcher_IOBluetoothInfo, 1,
         [](void *user, KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
@@ -92,6 +96,10 @@ bool CIntelBTPatcher::init()
 void CIntelBTPatcher::free()
 {
     DBGLOG(DRV_NAME, "%s", __PRETTY_FUNCTION__);
+    if (leMetaLock) {
+        IOSimpleLockFree(leMetaLock);
+        leMetaLock = nullptr;
+    }
 }
 
 void CIntelBTPatcher::processKext(KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)
@@ -202,8 +210,16 @@ static const uint8_t randomAddressHci[9] = {0x05, 0x20, 0x06, 0x94, 0x50, 0x64, 
 #define HCI_OP_LE_SET_SCAN_ENABLE       0x200C
 #define HCI_OP_LE_READ_REMOTE_FEATURES  0x2016
 
+struct LeMetaSlot {
+    uint16_t handle;
+    uint8_t pending;
+    uint8_t stage;
+    bool inUse;
+};
+
+static constexpr size_t kMaxLeMetaSlots = 16;
+static LeMetaSlot leMetaSlots[kMaxLeMetaSlots] = {};
 static volatile SInt32 remoteReadSCount = 0;
-static volatile SInt32 leMetaStage = 0;
 
 static inline void decrementRemoteReadCount()
 {
@@ -213,6 +229,79 @@ static inline void decrementRemoteReadCount()
         if (oldVal <= 0)
             break;
     } while (!OSCompareAndSwap(oldVal, oldVal - 1, &remoteReadSCount));
+}
+
+static void resetLeMetaState()
+{
+    if (leMetaLock)
+        IOSimpleLockLock(leMetaLock);
+    memset(leMetaSlots, 0, sizeof(leMetaSlots));
+    remoteReadSCount = 0;
+    if (leMetaLock)
+        IOSimpleLockUnlock(leMetaLock);
+}
+
+static LeMetaSlot *findOrAllocLeMetaSlotLocked(uint16_t handle, bool allocate)
+{
+    LeMetaSlot *freeSlot = nullptr;
+    for (size_t i = 0; i < kMaxLeMetaSlots; i++) {
+        if (leMetaSlots[i].inUse) {
+            if (leMetaSlots[i].handle == handle)
+                return &leMetaSlots[i];
+        } else if (!freeSlot) {
+            freeSlot = &leMetaSlots[i];
+        }
+    }
+    if (allocate) {
+        if (!freeSlot) {
+            static size_t evictIdx = 0;
+            freeSlot = &leMetaSlots[evictIdx];
+            evictIdx = (evictIdx + 1) % kMaxLeMetaSlots;
+            for (uint8_t i = 0; i < freeSlot->pending; i++)
+                decrementRemoteReadCount();
+        }
+        freeSlot->handle = handle;
+        freeSlot->pending = 0;
+        freeSlot->stage = 0;
+        freeSlot->inUse = true;
+        return freeSlot;
+    }
+    return nullptr;
+}
+
+static bool addLeMetaPending(uint16_t handle, uint8_t count)
+{
+    bool added = false;
+    if (leMetaLock)
+        IOSimpleLockLock(leMetaLock);
+    LeMetaSlot *slot = findOrAllocLeMetaSlotLocked(handle, true);
+    if (slot) {
+        slot->pending += count;
+        OSAddAtomic(count, &remoteReadSCount);
+        added = true;
+    }
+    if (leMetaLock)
+        IOSimpleLockUnlock(leMetaLock);
+    return added;
+}
+
+static void rollbackLeMetaPending(uint16_t handle, uint8_t count)
+{
+    if (leMetaLock)
+        IOSimpleLockLock(leMetaLock);
+    LeMetaSlot *slot = findOrAllocLeMetaSlotLocked(handle, false);
+    if (slot) {
+        uint8_t dec = min(slot->pending, count);
+        slot->pending -= dec;
+        if (slot->pending == 0) {
+            slot->inUse = false;
+            slot->stage = 0;
+        }
+        for (uint8_t i = 0; i < dec; i++)
+            decrementRemoteReadCount();
+    }
+    if (leMetaLock)
+        IOSimpleLockUnlock(leMetaLock);
 }
 
 IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, StandardUSB::DeviceRequest &request, void *data, IOMemoryDescriptor *descriptor, unsigned int &length, IOUSBHostCompletion *completion, unsigned int timeout)
@@ -251,8 +340,7 @@ IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, 
         // HCI reset, we need to send Random address again and reset states
         if (hdr->opcode == HCI_OP_RESET) {
             _randomAddressInit = false;
-            remoteReadSCount = 0;
-            leMetaStage = 0;
+            resetLeMetaState();
         } else if (hdrLen >= 9 && hdr->opcode == HCI_OP_LE_SET_SCAN_PARAM && hdr->data[5] == 0x1) {
             if (!_randomAddressInit) {
                 StandardUSB::DeviceRequest randReq = {};
@@ -283,15 +371,17 @@ IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, 
                     randDesc->release();
                 }
             }
-        } else if (hdr->opcode == HCI_OP_LE_READ_REMOTE_FEATURES) {
+        } else if (hdr->opcode == HCI_OP_LE_READ_REMOTE_FEATURES && hdrLen >= 5) {
+            uint16_t handle = (uint16_t)hdr->data[0] | ((uint16_t)hdr->data[1] << 8);
             // #514: send TWO extra reads -> two duplicate 0x04 events to rewrite
             // (1st dup -> fake PHY Update Complete, 2nd dup -> fake LE Data Length Change).
             for (int i = 0; i < 2; i++) {
+                if (!addLeMetaPending(handle, 1))
+                    break;
                 unsigned int dupLen = length;
-                OSIncrementAtomic(&remoteReadSCount);
                 IOReturn dupRet = FunctionCast(newHostDeviceRequest, callbackIBTPatcher->oldHostDeviceRequest)(that, provider, request, data, descriptor, dupLen, nullptr, timeout);
                 if (dupRet != kIOReturnSuccess)
-                    decrementRemoteReadCount();
+                    rollbackLeMetaPending(handle, 1);
             }
         }
 #if DEBUG
@@ -319,7 +409,7 @@ static void asyncIOCompletion(void* owner, void* parameter, IOReturn status, uin
     //   stage 0 = the real one (pass through), 1 = rewrite to fake PHY Update Complete,
     //   2 = rewrite to fake LE Data Length Change (clears bluetoothd's LE_READY_WAIT_FOR_LENGTH).
 
-    if (status == kIOReturnSuccess && dataBuffer && bytesTransferred >= 6 && bytesTransferred <= MAX_HCI_BUF_LEN) {
+    if (OSAddAtomic(0, &remoteReadSCount) > 0 && status == kIOReturnSuccess && dataBuffer && bytesTransferred >= 6 && bytesTransferred <= MAX_HCI_BUF_LEN) {
         uint8_t buffer[MAX_HCI_BUF_LEN] = {0};
         bool prepared = (getKernelVersion() < KernelVersion::Sequoia) ||
                         (dataBuffer->prepare(kIODirectionInOut) == kIOReturnSuccess);
@@ -327,28 +417,43 @@ static void asyncIOCompletion(void* owner, void* parameter, IOReturn status, uin
             dataBuffer->readBytes(0, buffer, bytesTransferred);
             HciEventHdr *hdr = (HciEventHdr *)buffer;
             if (hdr->evt == HCI_EVT_LE_META && hdr->data[0] == HCI_EVT_LE_META_READ_REMOTE_FEATURES_COMPLETE) {
-                SInt32 pendingCount = OSAddAtomic(0, &remoteReadSCount);
-                SInt32 currentStage = leMetaStage;
-                if (pendingCount <= 0) {
-                    leMetaStage = 0;            // no duplicate reads pending -> pass through & ensure stage is 0
-                } else if (currentStage == 0) {
-                    leMetaStage = 1;            // real features complete -> pass through
-                } else if (currentStage == 1) {  // 1st duplicate -> fake PHY Update Complete
-                    uint8_t localPhyEvent[8] = {0x3E, 0x06, 0x0C, 0x00, hdr->data[2], hdr->data[3], 0x02, 0x02};
+                uint16_t handle = (uint16_t)hdr->data[2] | ((uint16_t)hdr->data[3] << 8);
+                uint8_t actionStage = 0;
+                if (leMetaLock)
+                    IOSimpleLockLock(leMetaLock);
+                LeMetaSlot *slot = findOrAllocLeMetaSlotLocked(handle, false);
+                if (slot && slot->pending > 0) {
+                    actionStage = slot->stage;
+                    if (slot->stage == 0) {
+                        slot->stage = 1;            // real features complete -> pass through
+                    } else if (slot->stage == 1) {
+                        slot->stage = 2;
+                        slot->pending--;
+                        decrementRemoteReadCount();
+                    } else {
+                        slot->pending--;
+                        decrementRemoteReadCount();
+                        slot->stage = 0;
+                        if (slot->pending == 0)
+                            slot->inUse = false;
+                    }
+                }
+                if (leMetaLock)
+                    IOSimpleLockUnlock(leMetaLock);
+
+                if (actionStage == 1) {             // 1st duplicate -> fake PHY Update Complete
+                    uint8_t phy = CIntelBTPatcher::supportsLe2MPhy() ? 0x02 : 0x01;
+                    uint8_t localPhyEvent[8] = {0x3E, 0x06, 0x0C, hdr->data[1], hdr->data[2], hdr->data[3], phy, phy};
                     if (dataBuffer->getLength() >= sizeof(localPhyEvent)) {
                         dataBuffer->writeBytes(0, localPhyEvent, sizeof(localPhyEvent));
                         bytesTransferred = sizeof(localPhyEvent);
                     }
-                    leMetaStage = 2;
-                    decrementRemoteReadCount();
-                } else {                        // 2nd duplicate -> fake LE Data Length Change
+                } else if (actionStage == 2) {      // 2nd duplicate -> fake LE Data Length Change
                     uint8_t localDLCEvent[13] = {0x3E, 0x0B, 0x07, hdr->data[2], hdr->data[3], 0x1B, 0x00, 0x48, 0x01, 0x1B, 0x00, 0x48, 0x01};
                     if (dataBuffer->getLength() >= sizeof(localDLCEvent)) {
                         dataBuffer->writeBytes(0, localDLCEvent, sizeof(localDLCEvent));
                         bytesTransferred = sizeof(localDLCEvent);
                     }
-                    leMetaStage = 0;
-                    decrementRemoteReadCount();
                 }
             }
             if (getKernelVersion() >= KernelVersion::Sequoia)
@@ -364,24 +469,21 @@ IOReturn CIntelBTPatcher::
 newAsyncIO(void *that, IOMemoryDescriptor* dataBuffer, uint32_t bytesTransferred, IOUSBHostCompletion* completion, uint32_t completionTimeoutMs)
 {
     AsyncOwnerData *ownerData = nullptr;
-    IOUSBHostCompletion originalCompletion;
+    IOUSBHostCompletion localCompletion;
+    IOUSBHostCompletion *targetCompletion = completion;
 
-    if (OSAddAtomic(0, &remoteReadSCount) > 0 && that == _hookPipeInstance && completion) {
-        ownerData = new AsyncOwnerData;
+    if (that == _hookPipeInstance && completion) {
+        ownerData = new AsyncOwnerData{completion->owner, dataBuffer, completion->action};
         if (ownerData) {
-            originalCompletion = *completion;
-            ownerData->action = completion->action;
-            ownerData->owner = completion->owner;
-            ownerData->dataBuffer = dataBuffer;
-            completion->action = asyncIOCompletion;
-            completion->owner = ownerData;
+            localCompletion.owner = ownerData;
+            localCompletion.action = asyncIOCompletion;
+            localCompletion.parameter = completion->parameter;
+            targetCompletion = &localCompletion;
         }
     }
-    IOReturn ret = FunctionCast(newAsyncIO, callbackIBTPatcher->oldAsyncIO)(that, dataBuffer, bytesTransferred, completion, completionTimeoutMs);
-    if (ret != kIOReturnSuccess && ownerData) {
-        *completion = originalCompletion;
+    IOReturn ret = FunctionCast(newAsyncIO, callbackIBTPatcher->oldAsyncIO)(that, dataBuffer, bytesTransferred, targetCompletion, completionTimeoutMs);
+    if (ret != kIOReturnSuccess && ownerData)
         delete ownerData;
-    }
     return ret;
 }
 
@@ -398,11 +500,12 @@ void CIntelBTPatcher::captureIntelInterruptPipe(void *that, StandardUSB::Endpoin
         uint8_t epType = StandardUSB::getEndpointType(descriptor);
         uint8_t epDir = StandardUSB::getEndpointDirection(descriptor);
         if (epType == kIOUSBEndpointTypeInterrupt && epDir == StandardUSB::kEndpointDescriptorDirectionIn) {
+            uint16_t pid = USBToHost16(deviceDescriptor->idProduct);
             CIntelBTPatcher::_hookPipeInstance = that;
             CIntelBTPatcher::_hookDeviceInstance = device;
             _randomAddressInit = false;
-            remoteReadSCount = 0;
-            leMetaStage = 0;
+            _supportsLe2MPhy = (pid != 0x07dc && pid != 0x0a2a && pid != 0x0aa7 && pid != 0x0a2b);
+            resetLeMetaState();
         }
     }
 }

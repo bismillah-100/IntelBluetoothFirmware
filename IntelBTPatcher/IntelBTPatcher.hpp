@@ -78,6 +78,7 @@ public:
     static IOReturn newAsyncIO(void *that, IOMemoryDescriptor* dataBuffer, uint32_t dataBufferLength, IOUSBHostCompletion* completion, uint32_t completionTimeoutMs);
     static int newInitPipe(void *that, StandardUSB::EndpointDescriptor const *descriptor, StandardUSB::SuperSpeedEndpointCompanionDescriptor const *superDescriptor,AppleUSBHostController *controller, IOUSBHostDevice *device, IOUSBHostInterface *interface, unsigned char, unsigned short);
     static int newInitPipeConfig(void *that, StandardUSB::EndpointDescriptor const *descriptor, StandardUSB::ConfigurationDescriptor const *configDescriptor, AppleUSBHostController *controller, IOUSBHostDevice *device, IOUSBHostInterface *interface, unsigned char, unsigned short);
+    static bool supportsLe2MPhy() { return _supportsLe2MPhy; }
 
     
     mach_vm_address_t oldFindQueueRequest {};
@@ -91,6 +92,7 @@ private:
     static void *_hookPipeInstance;
     static IOUSBHostDevice *_hookDeviceInstance;
     static bool _randomAddressInit;
+    static bool _supportsLe2MPhy;
 };
 
 #endif /* IntelBTPatcher_h */
