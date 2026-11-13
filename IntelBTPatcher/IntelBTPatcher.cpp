@@ -310,7 +310,7 @@ IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, 
     uint32_t hdrLen = 0;
     char hciBuf[MAX_HCI_BUF_LEN] = {0};
 
-    bool isIntelBT = (_hookDeviceInstance == nullptr || that == _hookDeviceInstance) &&
+    bool isIntelBT = (_hookDeviceInstance != nullptr && that == _hookDeviceInstance) &&
                      ((request.bmRequestType & kDeviceRequestDirectionMask) == kRequestDirectionOut) &&
                      (((request.bmRequestType & kDeviceRequestTypeMask) >> kDeviceRequestTypePhase) == kRequestTypeClass);
 
@@ -385,7 +385,13 @@ IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, 
             }
         }
 #if DEBUG
-        DBGLOG(DRV_NAME, "[%s] bRequest: 0x%x direction: %s type: %s recipient: %s wValue: 0x%02x wIndex: 0x%02x opcode: 0x%04x len: %d length: %d async: %d", provider->getName(), request.bRequest, requestDirectionNames[(request.bmRequestType & kDeviceRequestDirectionMask) >> kDeviceRequestDirectionPhase], requestRecipientNames[(request.bmRequestType & kDeviceRequestRecipientMask) >> kDeviceRequestRecipientPhase], requestTypeNames[(request.bmRequestType & kDeviceRequestTypeMask) >> kDeviceRequestTypePhase], request.wValue, request.wIndex, hdr->opcode, hdr->len, request.wLength, completion != nullptr);
+        uint8_t dirIdx = (request.bmRequestType & kDeviceRequestDirectionMask) >> kDeviceRequestDirectionPhase;
+        uint8_t typeIdx = (request.bmRequestType & kDeviceRequestTypeMask) >> kDeviceRequestTypePhase;
+        uint8_t recpIdx = (request.bmRequestType & kDeviceRequestRecipientMask) >> kDeviceRequestRecipientPhase;
+        const char *dirName = dirIdx < arrsize(requestDirectionNames) ? requestDirectionNames[dirIdx] : "Reserved";
+        const char *typeName = typeIdx < arrsize(requestTypeNames) ? requestTypeNames[typeIdx] : "Reserved";
+        const char *recpName = recpIdx < arrsize(requestRecipientNames) ? requestRecipientNames[recpIdx] : "Reserved";
+        DBGLOG(DRV_NAME, "[%s] bRequest: 0x%x direction: %s type: %s recipient: %s wValue: 0x%02x wIndex: 0x%02x opcode: 0x%04x len: %d length: %d async: %d", provider ? provider->getName() : "unknown", request.bRequest, dirName, typeName, recpName, request.wValue, request.wIndex, hdr->opcode, hdr->len, request.wLength, completion != nullptr);
         if (hdrLen) {
             const char *dump = _hexDumpHCIData((uint8_t *)hdr, hdrLen);
             if (dump) {
@@ -411,8 +417,9 @@ static void asyncIOCompletion(void* owner, void* parameter, IOReturn status, uin
 
     if (OSAddAtomic(0, &remoteReadSCount) > 0 && status == kIOReturnSuccess && dataBuffer && bytesTransferred >= 6 && bytesTransferred <= MAX_HCI_BUF_LEN) {
         uint8_t buffer[MAX_HCI_BUF_LEN] = {0};
+        IODirection bufDir = dataBuffer->getDirection();
         bool prepared = (getKernelVersion() < KernelVersion::Sequoia) ||
-                        (dataBuffer->prepare(kIODirectionInOut) == kIOReturnSuccess);
+                        (dataBuffer->prepare(bufDir) == kIOReturnSuccess);
         if (prepared) {
             dataBuffer->readBytes(0, buffer, bytesTransferred);
             HciEventHdr *hdr = (HciEventHdr *)buffer;
@@ -457,7 +464,7 @@ static void asyncIOCompletion(void* owner, void* parameter, IOReturn status, uin
                 }
             }
             if (getKernelVersion() >= KernelVersion::Sequoia)
-                dataBuffer->complete(kIODirectionInOut);
+                dataBuffer->complete(bufDir);
         }
     }
     if (asyncOwner->action)
