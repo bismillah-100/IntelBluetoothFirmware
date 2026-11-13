@@ -310,7 +310,7 @@ IOReturn CIntelBTPatcher::newHostDeviceRequest(void *that, IOService *provider, 
     uint32_t hdrLen = 0;
     char hciBuf[MAX_HCI_BUF_LEN] = {0};
 
-    bool isIntelBT = (_hookDeviceInstance != nullptr && that == _hookDeviceInstance) &&
+    bool isIntelBT = (_hookDeviceInstance == nullptr || that == _hookDeviceInstance) &&
                      ((request.bmRequestType & kDeviceRequestDirectionMask) == kRequestDirectionOut) &&
                      (((request.bmRequestType & kDeviceRequestTypeMask) >> kDeviceRequestTypePhase) == kRequestTypeClass);
 
