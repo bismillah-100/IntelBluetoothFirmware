@@ -177,14 +177,6 @@ shutdown()
 }
 
 bool IntelBluetoothOpsGen1::
-getFirmwareName(char *fwname, size_t len)
-{
-    strncpy(fwname, this->loadedFirmwareName, len - 1);
-    fwname[len - 1] = '\0';
-    return true;
-}
-
-bool IntelBluetoothOpsGen1::
 hciReset()
 {
     HciCommandHdr cmd = {

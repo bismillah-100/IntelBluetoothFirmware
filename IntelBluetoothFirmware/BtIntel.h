@@ -153,7 +153,7 @@ public:
     
     virtual bool shutdown() = 0;
     
-    virtual bool getFirmwareName(char *fwname, size_t len) = 0;
+    virtual bool getFirmwareName(char *fwname, size_t len);
     
     bool securedSend(uint8_t fragmentType, uint32_t len, const uint8_t *fragment);
     
@@ -197,6 +197,7 @@ protected:
     
 protected:
     USBDeviceController *m_pUSBDeviceController;
+    char loadedFirmwareName[64];
 };
 
 #endif /* BtIntel_h */

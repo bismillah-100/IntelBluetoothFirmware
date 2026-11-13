@@ -28,8 +28,6 @@ public:
     
     virtual bool shutdown() override;
     
-    virtual bool getFirmwareName(char *fwname, size_t len) override;
-    
 protected:
     
     bool downloadFirmwarePayload(OSData *fwData, size_t offset);
@@ -47,9 +45,6 @@ private:
     IOReturn downloadFirmwareData(IntelVersion *ver, OSData *fwData, uint32_t *bootParams);
     
     bool downloadFirmware(IntelVersion *ver, IntelBootParams *params, uint32_t *bootParams);
-    
-private:
-    char loadedFirmwareName[64];
     
 };
 

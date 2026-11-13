@@ -24,6 +24,7 @@ initWithDevice(IOService *client, IOUSBHostDevice *dev)
     if (!super::init()) {
         return false;
     }
+    memset(loadedFirmwareName, 0, sizeof(loadedFirmwareName));
     
     m_pUSBDeviceController = new USBDeviceController();
     if (!m_pUSBDeviceController->init(client, dev)) {
@@ -47,6 +48,17 @@ free()
     XYLog("%s\n", __PRETTY_FUNCTION__);
     OSSafeReleaseNULL(m_pUSBDeviceController);
     super::free();
+}
+
+bool BtIntel::
+getFirmwareName(char *fwname, size_t len)
+{
+    if (!fwname || len == 0) {
+        return false;
+    }
+    strncpy(fwname, this->loadedFirmwareName, len - 1);
+    fwname[len - 1] = '\0';
+    return true;
 }
 
 bool BtIntel::

@@ -78,7 +78,7 @@ bool IntelBluetoothFirmware::start(IOService *provider)
     } else {
         m_pBTIntel = new IntelBluetoothOpsGen3();
     }
-    if (!m_pBTIntel->initWithDevice(this, m_pDevice)) {
+    if (!m_pBTIntel || !m_pBTIntel->initWithDevice(this, m_pDevice)) {
         XYLog("start fail, can not init device\n");
         cleanUp();
         stop(this);

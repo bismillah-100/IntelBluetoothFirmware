@@ -59,8 +59,6 @@ public:
     
     virtual bool shutdown() override;
     
-    virtual bool getFirmwareName(char *fwname, size_t len) override;
-    
 protected:
     
     bool ecdsaHeaderSecureSend(OSData *fwData);
@@ -82,9 +80,6 @@ private:
     bool downloadFirmware(IntelVersionTLV *ver, uint32_t *bootParams);
     
     IOReturn downloadFirmwareData(IntelVersionTLV *ver, OSData *fwData, uint32_t *bootParams, uint8_t hwVariant, uint8_t sbeType);
-    
-private:
-    char loadedFirmwareName[64];
 };
 
 #endif /* IntelBluetoothOpsGen3_hpp */

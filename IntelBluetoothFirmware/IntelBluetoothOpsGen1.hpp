@@ -20,8 +20,6 @@ public:
     
     virtual bool shutdown() override;
     
-    virtual bool getFirmwareName(char *fwname, size_t len) override;
-    
 private:
     
     bool patching(OSData *fwData, const uint8_t **fw_ptr, bool *disablePatch);
@@ -29,9 +27,6 @@ private:
     bool hciReset();
     
     OSData *getFirmware(IntelVersion *ver, char *, size_t);
-    
-private:
-    char loadedFirmwareName[64];
     
 };
 
