@@ -27,7 +27,7 @@ initWithDevice(IOService *client, IOUSBHostDevice *dev)
     memset(loadedFirmwareName, 0, sizeof(loadedFirmwareName));
     
     m_pUSBDeviceController = new USBDeviceController();
-    if (!m_pUSBDeviceController->init(client, dev)) {
+    if (!m_pUSBDeviceController || !m_pUSBDeviceController->init(client, dev)) {
         return false;
     }
     if (!m_pUSBDeviceController->initConfiguration()) {
@@ -66,12 +66,24 @@ intelSendHCISync(HciCommandHdr *cmd, void *event, uint32_t eventBufSize, uint32_
 {
 //    XYLog("%s cmd: 0x%02x len: %d\n", __PRETTY_FUNCTION__, cmd->opcode, cmd->len);
     IOReturn ret;
+    uint8_t localBuf[CMD_BUF_MAX_SIZE];
+    uint32_t localSize = 0;
+    void *targetBuf = event ? event : localBuf;
+    uint32_t targetBufSize = event ? eventBufSize : sizeof(localBuf);
+    uint32_t *targetSize = size ? size : &localSize;
+
     if ((ret = m_pUSBDeviceController->sendHCIRequest(cmd, timeout)) != kIOReturnSuccess) {
         XYLog("%s sendHCIRequest failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
         return false;
     }
-    if ((ret = m_pUSBDeviceController->interruptPipeRead(event, eventBufSize, size, timeout)) != kIOReturnSuccess) {
+    if ((ret = m_pUSBDeviceController->interruptPipeRead(targetBuf, targetBufSize, targetSize, timeout)) != kIOReturnSuccess) {
         XYLog("%s interruptPipeRead failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
+        return false;
+    }
+    HciResponse *resp = (HciResponse *)targetBuf;
+    if (*targetSize >= 6 && targetBufSize >= 6 && resp->evt.evt == HCI_EV_CMD_COMPLETE &&
+        resp->opcode == cmd->opcode && resp->data[0] != 0x00) {
+        XYLog("%s cmd 0x%04x failed with HCI status 0x%02x\n", __FUNCTION__, cmd->opcode, resp->data[0]);
         return false;
     }
     return true;
@@ -81,17 +93,35 @@ bool BtIntel::
 intelSendHCISyncEvent(HciCommandHdr *cmd, void *event, uint32_t eventBufSize, uint32_t *size, uint8_t syncEvent, int timeout)
 {
     IOReturn ret;
+    if (!event || eventBufSize == 0) {
+        return false;
+    }
     if ((ret = m_pUSBDeviceController->sendHCIRequest(cmd, timeout)) != kIOReturnSuccess) {
         XYLog("%s sendHCIRequest failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
         return false;
     }
+    uint64_t deadline = 0;
+    uint64_t now = 0;
+    clock_interval_to_deadline(timeout > 0 ? (uint32_t)timeout : 1, kMillisecondScale, &deadline);
     do {
-        ret = m_pUSBDeviceController->interruptPipeRead(event, eventBufSize, size, timeout);
+        uint32_t localSize = 0;
+        clock_get_uptime(&now);
+        if (now >= deadline) {
+            XYLog("%s timeout waiting for event 0x%02x\n", __FUNCTION__, syncEvent);
+            break;
+        }
+        uint64_t remainingNs = 0;
+        absolutetime_to_nanoseconds(deadline - now, &remainingNs);
+        uint32_t remainingMs = (uint32_t)max((uint64_t)1, remainingNs / NSEC_PER_MSEC);
+        ret = m_pUSBDeviceController->interruptPipeRead(event, eventBufSize, &localSize, remainingMs);
         if (ret != kIOReturnSuccess) {
             XYLog("%s interruptPipeRead failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
             break;
         }
-        if (*(uint8_t *)event == syncEvent) {
+        if (size) {
+            *size = localSize;
+        }
+        if (localSize >= 1 && *(uint8_t *)event == syncEvent) {
             return true;
         }
     } while (true);
@@ -103,12 +133,24 @@ intelBulkHCISync(HciCommandHdr *cmd, void *event, uint32_t eventBufSize, uint32_
 {
 //    XYLog("%s cmd: 0x%02x len: %d\n", __FUNCTION__, cmd->opcode, cmd->len);
     IOReturn ret;
+    uint8_t localBuf[CMD_BUF_MAX_SIZE];
+    uint32_t localSize = 0;
+    void *targetBuf = event ? event : localBuf;
+    uint32_t targetBufSize = event ? eventBufSize : sizeof(localBuf);
+    uint32_t *targetSize = size ? size : &localSize;
+
     if ((ret = m_pUSBDeviceController->bulkWrite(cmd, HCI_COMMAND_HDR_SIZE + cmd->len, timeout)) != kIOReturnSuccess) {
         XYLog("%s bulkWrite failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
         return false;
     }
-    if ((ret = m_pUSBDeviceController->bulkPipeRead(event, eventBufSize, size, timeout)) != kIOReturnSuccess) {
+    if ((ret = m_pUSBDeviceController->bulkPipeRead(targetBuf, targetBufSize, targetSize, timeout)) != kIOReturnSuccess) {
         XYLog("%s bulkPipeRead failed: %s %d\n", __FUNCTION__, m_pUSBDeviceController->stringFromReturn(ret), ret);
+        return false;
+    }
+    HciResponse *resp = (HciResponse *)targetBuf;
+    if (*targetSize >= 6 && targetBufSize >= 6 && resp->evt.evt == HCI_EV_CMD_COMPLETE &&
+        resp->opcode == cmd->opcode && resp->data[0] != 0x00) {
+        XYLog("%s cmd 0x%04x failed with HCI status 0x%02x\n", __FUNCTION__, cmd->opcode, resp->data[0]);
         return false;
     }
     return true;
@@ -202,6 +244,8 @@ intelBoot(uint32_t bootAddr)
     uint8_t buf[CMD_BUF_MAX_SIZE];
     uint32_t actLen = 0;
     HciResponse *resp = (HciResponse *)buf;
+
+    memset(buf, 0, sizeof(buf));
     
     if (!sendIntelReset(bootAddr)) {
         XYLog("Intel Soft Reset failed\n");
@@ -217,7 +261,7 @@ intelBoot(uint32_t bootAddr)
      * since something went wrong.
      */
     IOReturn ret = m_pUSBDeviceController->interruptPipeRead(buf, sizeof(buf), &actLen, 1000);
-    if (ret != kIOReturnSuccess || actLen <= 0) {
+    if (ret != kIOReturnSuccess || actLen < 3) {
         XYLog("Intel boot failed\n");
         if (ret == kIOReturnTimeout) {
             XYLog("Reset to bootloader\n");

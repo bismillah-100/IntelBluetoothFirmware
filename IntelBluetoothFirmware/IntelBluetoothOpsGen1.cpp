@@ -312,6 +312,15 @@ patching(OSData *fwData, const uint8_t **fw_ptr, bool *disablePatch)
         XYLog("sending Intel patch command (0x%4.4x) failed\n", hciCmd->opcode);
         return false;
     }
+    if (actRespLen < sizeof(HciEventHdr) + evt->len) {
+        XYLog("Intel patch command (0x%4.4x) invalid resp len (%u < %zu)\n", hciCmd->opcode, actRespLen, sizeof(HciEventHdr) + evt->len);
+        return false;
+    }
+    if (evt->evt == HCI_EV_CMD_COMPLETE && evt->len >= 4 &&
+        (resp->opcode != hciCmd->opcode || resp->data[0] != 0x00)) {
+        XYLog("Intel patch command (0x%4.4x) failed status 0x%02x\n", hciCmd->opcode, resp->data[0]);
+        return false;
+    }
     
     return true;
 }
