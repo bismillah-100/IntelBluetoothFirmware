@@ -41,10 +41,14 @@ static inline OSData *getFWDescByName(const char* name) {
     return NULL;
 }
 
-static inline bool uncompressFirmware(unsigned char *dest, uint *destLen, unsigned char *source, uint sourceLen)
+static inline bool uncompressFirmware(unsigned char *dest, uint *destLen, unsigned char *source, uint sourceLen, bool *bufTooSmall = NULL)
 {
     z_stream stream;
     int err;
+
+    if (bufTooSmall) {
+        *bufTooSmall = false;
+    }
     
     stream.next_in = source;
     stream.avail_in = sourceLen;
@@ -58,6 +62,9 @@ static inline bool uncompressFirmware(unsigned char *dest, uint *destLen, unsign
     }
     err = inflate(&stream, Z_FINISH);
     if (err != Z_STREAM_END) {
+        if (bufTooSmall) {
+            *bufTooSmall = (err == Z_OK || err == Z_BUF_ERROR) && stream.avail_out == 0;
+        }
         inflateEnd(&stream);
         return false;
     }

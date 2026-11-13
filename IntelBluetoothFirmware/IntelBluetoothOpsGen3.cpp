@@ -29,7 +29,7 @@ readVersionTyP(void *version)
         return 0;
     }
     
-    if (actLen - 5 <= 0 || actLen - 5 > CMD_BUF_MAX_SIZE) {
+    if (actLen < 5 || actLen - 5 == 0 || actLen - 5 > CMD_BUF_MAX_SIZE) {
         XYLog("Intel version size invalid (act: %d)\n", actLen);
         return 0;
     }

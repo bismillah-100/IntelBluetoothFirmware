@@ -98,7 +98,7 @@ readVersion(IntelVersion *version)
         return false;
     }
     
-    if (actLen - 5 != sizeof(*version)) {
+    if (actLen < 5 || actLen - 5 != sizeof(*version)) {
         XYLog("Intel version event size mismatch (act: %d, ver: %d)\n", actLen, (int)sizeof(*version));
         return false;
     }
@@ -142,7 +142,7 @@ readBootParams(IntelBootParams *params)
         return false;
     }
     
-    if (actLen - 5 != sizeof(*params)) {
+    if (actLen < 5 || actLen - 5 != sizeof(*params)) {
         XYLog("Intel boot parameters size mismatch\n");
         return false;
     }
@@ -240,7 +240,7 @@ readDebugFeatures(IntelDebugFeatures *features)
         return false;
     }
     
-    if (actLen - 5 != sizeof(features->page1) + 3) {
+    if (actLen < 5 || actLen - 5 != sizeof(features->page1) + 3) {
         XYLog("Supported features event size mismatch\n");
         return false;
     }

@@ -310,7 +310,7 @@ getFirmware(IntelVersion *ver, IntelBootParams *params,
         case 0x0b:    /* SfP */
         case 0x0c:    /* WsP */
             snprintf(name, len, "ibt-%u-%u.%s",
-                     OSSwapLittleToHostInt16(ver->hw_variant),
+                     ver->hw_variant,
                      OSSwapLittleToHostInt16(params->dev_revid),
                      suffix);
             break;
@@ -319,9 +319,9 @@ getFirmware(IntelVersion *ver, IntelBootParams *params,
         case 0x13:    /* HrP */
         case 0x14:    /* CcP */
             snprintf(name, len, "ibt-%u-%u-%u.%s",
-                     OSSwapLittleToHostInt16(ver->hw_variant),
-                     OSSwapLittleToHostInt16(ver->hw_revision),
-                     OSSwapLittleToHostInt16(ver->fw_revision),
+                     ver->hw_variant,
+                     ver->hw_revision,
+                     ver->fw_revision,
                      suffix);
             break;
         default:
