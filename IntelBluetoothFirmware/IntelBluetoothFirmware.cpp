@@ -70,7 +70,7 @@ bool IntelBluetoothFirmware::start(IOService *provider)
     if (!m_pDevice->open(this)) {
         XYLog("start fail, can not open device\n");
         cleanUp();
-        stop(this);
+        PMstop();
         return false;
     }
     if (currentType == kTypeGen1) {
@@ -81,13 +81,13 @@ bool IntelBluetoothFirmware::start(IOService *provider)
     if (!m_pBTIntel || !m_pBTIntel->initWithDevice(this, m_pDevice)) {
         XYLog("start fail, can not init device\n");
         cleanUp();
-        stop(this);
+        PMstop();
         return false;
     }
     XYLog("BT init succeed\n");
     if (!m_pBTIntel->setup()) {
         cleanUp();
-        stop(this);
+        PMstop();
         return false;
     }
     m_pBTIntel->getFirmwareName(fwName, sizeof(fwName));
